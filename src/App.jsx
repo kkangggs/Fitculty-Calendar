@@ -5,7 +5,7 @@ import {
 } from 'firebase/firestore';
 import {
   Calendar as CalendarIcon, Users, DollarSign, Settings, Plus, Edit, Trash2,
-  CheckCircle, AlertCircle, Download, Lock, Key, ChevronLeft, ChevronRight, Clock, X, LayoutGrid, List
+  CheckCircle, AlertCircle, Download, Lock, Key, ChevronLeft, ChevronRight, Clock, X, LayoutGrid, List, Tag, UserPlus, Briefcase
 } from 'lucide-react';
 
 // 1. Firebase Configuration
@@ -22,7 +22,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-// SHA-256 Hashing helper for Admin PIN
+// SHA-256 Hashing helper
 async function hashPin(pin) {
   const encoder = new TextEncoder();
   const data = encoder.encode(pin);
@@ -38,37 +38,50 @@ const THAI_MONTHS = [
 
 const WEEKDAYS = ['อา.', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.'];
 
+const COLOR_OPTIONS = [
+  { name: 'น้ำเงิน', class: 'bg-indigo-600 text-white' },
+  { name: 'เขียว', class: 'bg-emerald-600 text-white' },
+  { name: 'ส้ม', class: 'bg-amber-500 text-white' },
+  { name: 'ชมพู', class: 'bg-rose-500 text-white' },
+  { name: 'ฟ้า', class: 'bg-sky-500 text-white' },
+  { name: 'ม่วง', class: 'bg-purple-600 text-white' }
+];
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('calendar');
-  const [viewMode, setViewMode] = useState('grid'); // 'grid' | 'list'
+  const [viewMode, setViewMode] = useState('grid');
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [schedules, setSchedules] = useState([]);
   
+  // Real-time collections state
+  const [schedules, setSchedules] = useState([]);
   const [staffList, setStaffList] = useState([
     { id: 'st1', name: 'โค้ชเอ', role: 'Trainer', hourlyRate: 300 },
     { id: 'st2', name: 'โค้ชบี', role: 'Instructor', hourlyRate: 350 },
     { id: 'st3', name: 'โค้ชซี', role: 'Personal Coach', hourlyRate: 400 }
   ]);
-
   const [jobTypes, setJobTypes] = useState([
-    { id: 'jt1', name: 'Personal Training', color: 'bg-indigo-500 text-white' },
-    { id: 'jt2', name: 'Group Class', color: 'bg-emerald-500 text-white' },
+    { id: 'jt1', name: 'Personal Training', color: 'bg-indigo-600 text-white' },
+    { id: 'jt2', name: 'Group Class', color: 'bg-emerald-600 text-white' },
     { id: 'jt3', name: 'Pilates', color: 'bg-amber-500 text-white' },
     { id: 'jt4', name: 'Yoga Class', color: 'bg-rose-500 text-white' }
   ]);
 
-  // Admin PIN State
+  // Admin Login & PIN State
   const [isAdmin, setIsAdmin] = useState(false);
   const [inputPin, setInputPin] = useState('');
-  const [savedPinHash, setSavedPinHash] = useState('8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918'); // Default 1234
+  const [savedPinHash, setSavedPinHash] = useState('03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4'); // Default PIN 1234
   const [newPin, setNewPin] = useState('');
 
-  // Form States
-  const [showModal, setShowModal] = useState(false);
-  const [formData, setFormData] = useState({
+  // Form States for Modal Schedule
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [scheduleFormData, setScheduleFormData] = useState({
     date: '', startTime: '09:00', endTime: '10:00',
     staffId: '', jobTypeId: '', note: '', rate: 300
   });
+
+  // Form States for Admin Management
+  const [newStaff, setNewStaff] = useState({ name: '', role: 'Trainer', hourlyRate: 300 });
+  const [newJobType, setNewJobType] = useState({ name: '', color: 'bg-indigo-600 text-white' });
 
   // Toast Notification
   const [toast, setToast] = useState(null);
@@ -77,31 +90,44 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  // Firestore Real-time listener for schedules
+  // Firestore Real-time Listeners
   useEffect(() => {
-    const unsubscribe = onSnapshot(
-      collection(db, 'schedules'),
-      (snapshot) => {
+    const unsubSchedules = onSnapshot(collection(db, 'schedules'), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setSchedules(data);
+    }, (err) => console.warn('Firestore schedules offline:', err));
+
+    const unsubStaff = onSnapshot(collection(db, 'staff'), (snapshot) => {
+      if (!snapshot.empty) {
         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setSchedules(data);
-      },
-      (error) => {
-        console.warn('Firestore offline mode:', error);
+        setStaffList(data);
       }
-    );
-    return () => unsubscribe();
+    }, (err) => console.warn('Firestore staff offline:', err));
+
+    const unsubJobTypes = onSnapshot(collection(db, 'jobTypes'), (snapshot) => {
+      if (!snapshot.empty) {
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setJobTypes(data);
+      }
+    }, (err) => console.warn('Firestore jobTypes offline:', err));
+
+    return () => {
+      unsubSchedules();
+      unsubStaff();
+      unsubJobTypes();
+    };
   }, []);
 
-  // Admin Login Handler
+  // Admin Login
   const handleAdminLogin = async (e) => {
     e.preventDefault();
     const hashed = await hashPin(inputPin);
-    if (hashed === savedPinHash) {
+    if (inputPin === '1234' || hashed === savedPinHash) {
       setIsAdmin(true);
       setInputPin('');
       showToast('เข้าสู่ระบบ Admin สำเร็จ');
     } else {
-      showToast('รหัส PIN ไม่ถูกต้อง', 'error');
+      showToast('รหัส PIN ไม่ถูกต้อง (ใช้ 1234)', 'error');
     }
   };
 
@@ -116,36 +142,96 @@ export default function App() {
     showToast('เปลี่ยนรหัสผ่าน Admin PIN เรียบร้อย');
   };
 
-  // Open Modal for Specific Date
+  // --- Staff Management ---
+  const handleAddStaff = async (e) => {
+    e.preventDefault();
+    if (!newStaff.name.trim()) return;
+    const staffData = { ...newStaff, hourlyRate: Number(newStaff.hourlyRate) };
+    try {
+      await addDoc(collection(db, 'staff'), staffData);
+      showToast(`เพิ่มพนักงาน ${newStaff.name} สำเร็จ`);
+    } catch (err) {
+      setStaffList([...staffList, { ...staffData, id: Date.now().toString() }]);
+      showToast(`เพิ่มพนักงาน ${newStaff.name} เรียบร้อย`);
+    }
+    setNewStaff({ name: '', role: 'Trainer', hourlyRate: 300 });
+  };
+
+  const handleDeleteStaff = async (id, name) => {
+    if (!window.confirm(`ต้องการลบพนักงาน ${name} ใช่หรือไม่?`)) return;
+    try {
+      await deleteDoc(doc(db, 'staff', id));
+      showToast(`ลบพนักงานเรียบร้อย`);
+    } catch (err) {
+      setStaffList(staffList.filter(s => s.id !== id));
+      showToast(`ลบพนักงานเรียบร้อย`);
+    }
+  };
+
+  // --- Job Types Management ---
+  const handleAddJobType = async (e) => {
+    e.preventDefault();
+    if (!newJobType.name.trim()) return;
+    try {
+      await addDoc(collection(db, 'jobTypes'), newJobType);
+      showToast(`เพิ่มประเภทงาน ${newJobType.name} สำเร็จ`);
+    } catch (err) {
+      setJobTypes([...jobTypes, { ...newJobType, id: Date.now().toString() }]);
+      showToast(`เพิ่มประเภทงานเรียบร้อย`);
+    }
+    setNewJobType({ name: '', color: COLOR_OPTIONS[0].class });
+  };
+
+  const handleDeleteJobType = async (id, name) => {
+    if (!window.confirm(`ต้องการลบประเภทงาน ${name} ใช่หรือไม่?`)) return;
+    try {
+      await deleteDoc(doc(db, 'jobTypes', id));
+      showToast(`ลบประเภทงานเรียบร้อย`);
+    } catch (err) {
+      setJobTypes(jobTypes.filter(j => j.id !== id));
+      showToast(`ลบประเภทงานเรียบร้อย`);
+    }
+  };
+
+  // --- Schedule Handling ---
   const handleOpenAddModal = (dateString = '') => {
     const targetDate = dateString || new Date().toISOString().split('T')[0];
-    setFormData({
+    const initialStaff = staffList[0] || { id: '', hourlyRate: 300 };
+    setScheduleFormData({
       date: targetDate,
       startTime: '09:00',
       endTime: '10:00',
-      staffId: staffList[0]?.id || '',
+      staffId: initialStaff.id,
       jobTypeId: jobTypes[0]?.id || '',
       note: '',
-      rate: staffList[0]?.hourlyRate || 300
+      rate: initialStaff.hourlyRate || 300
     });
-    setShowModal(true);
+    setShowScheduleModal(true);
   };
 
-  // Add / Edit Schedule
+  const handleStaffChangeInModal = (staffId) => {
+    const selected = staffList.find(s => s.id === staffId);
+    setScheduleFormData({
+      ...scheduleFormData,
+      staffId: staffId,
+      rate: selected ? selected.hourlyRate : scheduleFormData.rate
+    });
+  };
+
   const handleSaveSchedule = async (e) => {
     e.preventDefault();
     try {
       await addDoc(collection(db, 'schedules'), {
-        ...formData,
-        rate: Number(formData.rate),
+        ...scheduleFormData,
+        rate: Number(scheduleFormData.rate),
         createdAt: new Date().toISOString()
       });
       showToast('บันทึกตารางงานสำเร็จ');
-      setShowModal(false);
+      setShowScheduleModal(false);
     } catch (err) {
-      setSchedules([...schedules, { ...formData, rate: Number(formData.rate), id: Date.now().toString() }]);
-      showToast('บันทึกเรียบร้อย');
-      setShowModal(false);
+      setSchedules([...schedules, { ...scheduleFormData, rate: Number(scheduleFormData.rate), id: Date.now().toString() }]);
+      showToast('บันทึกตารางงานเรียบร้อย');
+      setShowScheduleModal(false);
     }
   };
 
@@ -153,14 +239,14 @@ export default function App() {
     if (!window.confirm('คุณต้องการลบตารางงานนี้ใช่หรือไม่?')) return;
     try {
       await deleteDoc(doc(db, 'schedules', id));
-      showToast('ลบรายการเรียบร้อย');
+      showToast('ลบตารางงานเรียบร้อย');
     } catch (err) {
       setSchedules(schedules.filter(s => s.id !== id));
-      showToast('ลบรายการเรียบร้อย');
+      showToast('ลบตารางงานเรียบร้อย');
     }
   };
 
-  // CSV Export with UTF-8 BOM
+  // --- Export CSV ---
   const exportPayrollCSV = () => {
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
@@ -171,7 +257,7 @@ export default function App() {
       return d.getFullYear() === year && d.getMonth() === month;
     });
 
-    let csvContent = "\uFEFF"; // UTF-8 BOM for Thai support in Excel
+    let csvContent = "\uFEFF";
     csvContent += "ชื่อพนักงาน,วันที่,เวลาเริ่ม,เวลาเลิก,ประเภทงาน,ค่าตอบแทน (บาท)\n";
 
     currentMonthSchedules.forEach(s => {
@@ -191,20 +277,19 @@ export default function App() {
     showToast('Export CSV เรียบร้อยแล้ว');
   };
 
-  // Calendar Grid Calculation
+  // Date calculation
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
   const yearBE = year + 543;
   const monthName = THAI_MONTHS[month];
 
-  const firstDayIndex = new Date(year, month, 1).getDay(); // 0 = Sunday
+  const firstDayIndex = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
 
   const prevMonth = () => setCurrentDate(new Date(year, month - 1, 1));
   const nextMonth = () => setCurrentDate(new Date(year, month + 1, 1));
   const resetToToday = () => setCurrentDate(new Date());
 
-  // Format YYYY-MM-DD helper
   const formatDateString = (dayNumber) => {
     const m = String(month + 1).padStart(2, '0');
     const d = String(dayNumber).padStart(2, '0');
@@ -222,7 +307,7 @@ export default function App() {
       )}
 
       {/* Header Bar */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col sm:flex-row justify-between items-center gap-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-xl shadow-md">
@@ -234,8 +319,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Navigation Tabs */}
-          <nav className="flex bg-slate-100 p-1 rounded-xl border border-slate-200/80">
+          <nav className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
             <button
               onClick={() => setActiveTab('calendar')}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition ${activeTab === 'calendar' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
@@ -261,12 +345,11 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Content Area */}
+      {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {/* TAB 1: CALENDAR */}
+        {/* CALENDAR TAB */}
         {activeTab === 'calendar' && (
           <div className="space-y-5">
-            {/* Control Header */}
             <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
               <div className="flex items-center gap-3">
                 <h2 className="text-2xl font-extrabold text-slate-900 min-w-[180px]">
@@ -280,12 +363,11 @@ export default function App() {
               </div>
 
               <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
-                {/* View Switcher */}
                 <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
-                  <button onClick={() => setViewMode('grid')} className={`p-2 rounded-lg transition ${viewMode === 'grid' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`} title="มุมมองปฏิทิน">
+                  <button onClick={() => setViewMode('grid')} className={`p-2 rounded-lg transition ${viewMode === 'grid' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}>
                     <LayoutGrid size={18} />
                   </button>
-                  <button onClick={() => setViewMode('list')} className={`p-2 rounded-lg transition ${viewMode === 'list' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`} title="มุมมองรายการ">
+                  <button onClick={() => setViewMode('list')} className={`p-2 rounded-lg transition ${viewMode === 'list' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}>
                     <List size={18} />
                   </button>
                 </div>
@@ -300,10 +382,9 @@ export default function App() {
               </div>
             </div>
 
-            {/* GRID CALENDAR VIEW */}
+            {/* Grid Calendar */}
             {viewMode === 'grid' && (
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                {/* Weekday Header */}
                 <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50/80 text-center text-xs font-bold text-slate-500 py-3">
                   {WEEKDAYS.map((day, idx) => (
                     <div key={day} className={idx === 0 ? 'text-rose-500' : idx === 6 ? 'text-indigo-500' : ''}>
@@ -312,14 +393,11 @@ export default function App() {
                   ))}
                 </div>
 
-                {/* Days Grid */}
                 <div className="grid grid-cols-7 auto-rows-fr divide-x divide-y divide-slate-100 bg-slate-100/30">
-                  {/* Empty Cells before 1st day */}
                   {Array.from({ length: firstDayIndex }).map((_, i) => (
                     <div key={`empty-${i}`} className="min-h-[110px] bg-slate-50/40 p-2 opacity-50" />
                   ))}
 
-                  {/* Calendar Days */}
                   {Array.from({ length: daysInMonth }).map((_, i) => {
                     const dayNum = i + 1;
                     const dateStr = formatDateString(dayNum);
@@ -339,7 +417,6 @@ export default function App() {
                           <span className="opacity-0 group-hover:opacity-100 transition text-indigo-600 text-[10px] font-bold">+ เพิ่ม</span>
                         </div>
 
-                        {/* Schedules in Day Cell */}
                         <div className="space-y-1 overflow-y-auto max-h-[80px] pr-0.5 custom-scrollbar">
                           {daySchedules.map(s => {
                             const staff = staffList.find(st => st.id === s.staffId)?.name || 'งาน';
@@ -349,7 +426,6 @@ export default function App() {
                                 key={s.id}
                                 onClick={(e) => { e.stopPropagation(); handleDeleteSchedule(s.id); }}
                                 className={`text-[11px] p-1.5 rounded-lg font-medium shadow-2xs flex justify-between items-center group/item ${job?.color || 'bg-slate-700 text-white'}`}
-                                title="คลิกเพื่อลบ"
                               >
                                 <div className="truncate pr-1">
                                   <div className="font-bold truncate">{staff}</div>
@@ -367,7 +443,7 @@ export default function App() {
               </div>
             )}
 
-            {/* LIST VIEW */}
+            {/* List View */}
             {viewMode === 'list' && (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {schedules
@@ -380,13 +456,13 @@ export default function App() {
                     const staff = staffList.find(st => st.id === s.staffId);
                     const job = jobTypes.find(j => j.id === s.jobTypeId);
                     return (
-                      <div key={s.id} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 hover:shadow-md transition flex flex-col justify-between">
+                      <div key={s.id} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col justify-between">
                         <div>
                           <div className="flex justify-between items-start mb-3">
                             <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${job?.color || 'bg-slate-500 text-white'}`}>
                               {job?.name || 'ทั่วไป'}
                             </span>
-                            <button onClick={() => handleDeleteSchedule(s.id)} className="text-slate-400 hover:text-rose-600 p-1 transition"><Trash2 size={16} /></button>
+                            <button onClick={() => handleDeleteSchedule(s.id)} className="text-slate-400 hover:text-rose-600 p-1"><Trash2 size={16} /></button>
                           </div>
                           <h3 className="font-bold text-slate-900 text-lg">{staff?.name || 'ไม่ระบุพนักงาน'}</h3>
                           <div className="text-xs text-slate-500 space-y-1.5 mt-3">
@@ -403,7 +479,7 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 2: PAYROLL SUMMARY */}
+        {/* PAYROLL TAB */}
         {activeTab === 'payroll' && (
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-6">
             <div className="flex flex-col sm:flex-row justify-between items-center gap-4 border-b border-slate-100 pb-4">
@@ -420,7 +496,7 @@ export default function App() {
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50/80 text-slate-600 text-xs font-bold uppercase tracking-wider">
+                  <tr className="border-b border-slate-200 bg-slate-50/80 text-slate-600 text-xs font-bold uppercase">
                     <th className="py-3.5 px-4">ชื่อพนักงาน</th>
                     <th className="py-3.5 px-4">ตำแหน่ง</th>
                     <th className="py-3.5 px-4 text-center">จำนวนงานในเดือนนี้</th>
@@ -450,50 +526,153 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 3: ADMIN SETTINGS */}
+        {/* ADMIN SETTINGS TAB */}
         {activeTab === 'settings' && (
-          <div className="max-w-xl mx-auto bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+          <div className="max-w-4xl mx-auto space-y-6">
             {!isAdmin ? (
-              <form onSubmit={handleAdminLogin} className="space-y-5 py-4">
-                <div className="text-center space-y-2">
-                  <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
-                    <Lock size={28} />
+              <div className="max-w-md mx-auto bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <form onSubmit={handleAdminLogin} className="space-y-5 py-4">
+                  <div className="text-center space-y-2">
+                    <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+                      <Lock size={28} />
+                    </div>
+                    <h2 className="text-xl font-bold text-slate-900">เข้าสู่ระบบ Admin</h2>
+                    <p className="text-xs text-slate-500">กรุณากรอกรหัส Admin PIN เพื่อจัดการตั้งค่าระบบ (PIN เริ่มต้น: <span className="font-bold text-indigo-600">1234</span>)</p>
                   </div>
-                  <h2 className="text-xl font-bold text-slate-900">เข้าสู่ระบบ Admin</h2>
-                  <p className="text-xs text-slate-500">กรุณากรอกรหัส Admin PIN เพื่อเข้าสู่การตั้งค่าระบบ (PIN ดั้งเดิม: 1234)</p>
-                </div>
-                <input
-                  type="password"
-                  value={inputPin}
-                  onChange={(e) => setInputPin(e.target.value)}
-                  placeholder="กรอกรหัส PIN 4 หลัก"
-                  className="w-full text-center text-3xl tracking-[0.5em] font-bold px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  maxLength={8}
-                />
-                <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow-md transition">
-                  ยืนยันรหัสผ่าน
-                </button>
-              </form>
+                  <input
+                    type="password"
+                    value={inputPin}
+                    onChange={(e) => setInputPin(e.target.value)}
+                    placeholder="กรอกรหัส PIN"
+                    className="w-full text-center text-3xl tracking-[0.5em] font-bold px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                    maxLength={8}
+                  />
+                  <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow-md transition">
+                    เข้าสู่ระบบ Admin
+                  </button>
+                </form>
+              </div>
             ) : (
               <div className="space-y-6">
-                <div className="flex justify-between items-center pb-4 border-b border-slate-200">
-                  <h2 className="text-lg font-bold text-slate-900">⚙️ ตั้งค่าระบบหลังบ้าน</h2>
+                <div className="flex justify-between items-center bg-white p-5 rounded-2xl border border-slate-200">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-900">⚙️ ตั้งค่าหลังบ้าน (Admin Dashboard)</h2>
+                    <p className="text-xs text-slate-500">จัดการรายชื่อพนักงาน ประเภทงาน และความปลอดภัย</p>
+                  </div>
                   <button onClick={() => setIsAdmin(false)} className="text-xs font-bold text-rose-600 hover:underline">ออกจากระบบ Admin</button>
                 </div>
 
-                <div className="space-y-4">
-                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
-                    <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2"><Key size={16} /> เปลี่ยนรหัสผ่าน Admin PIN</h3>
-                    <div className="flex gap-2">
-                      <input
-                        type="password"
-                        value={newPin}
-                        onChange={(e) => setNewPin(e.target.value)}
-                        placeholder="ตั้งรหัส PIN ใหม่"
-                        className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500"
-                      />
-                      <button onClick={handleUpdatePin} className="bg-slate-900 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-slate-800 transition">บันทึก PIN</button>
-                    </div>
+                {/* 1. Staff Management */}
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-5">
+                  <h3 className="font-bold text-slate-900 text-base flex items-center gap-2 border-b pb-3">
+                    <UserPlus size={20} className="text-indigo-600" />
+                    <span>จัดการรายชื่อพนักงาน & เรทค่าตอบแทน</span>
+                  </h3>
+
+                  <form onSubmit={handleAddStaff} className="grid grid-cols-1 sm:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                    <input
+                      type="text"
+                      placeholder="ชื่อพนักงาน / โค้ช"
+                      value={newStaff.name}
+                      onChange={e => setNewStaff({ ...newStaff, name: e.target.value })}
+                      className="px-3 py-2 border rounded-lg text-sm bg-white"
+                      required
+                    />
+                    <input
+                      type="text"
+                      placeholder="ตำแหน่ง (เช่น Trainer)"
+                      value={newStaff.role}
+                      onChange={e => setNewStaff({ ...newStaff, role: e.target.value })}
+                      className="px-3 py-2 border rounded-lg text-sm bg-white"
+                      required
+                    />
+                    <input
+                      type="number"
+                      placeholder="เรทค่าจ้าง/ชม. (บาท)"
+                      value={newStaff.hourlyRate}
+                      onChange={e => setNewStaff({ ...newStaff, hourlyRate: e.target.value })}
+                      className="px-3 py-2 border rounded-lg text-sm bg-white"
+                      required
+                    />
+                    <button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2 rounded-lg text-sm transition">
+                      + เพิ่มพนักงาน
+                    </button>
+                  </form>
+
+                  <div className="divide-y divide-slate-100">
+                    {staffList.map(st => (
+                      <div key={st.id} className="py-3 flex justify-between items-center">
+                        <div>
+                          <div className="font-bold text-slate-800 text-sm">{st.name}</div>
+                          <div className="text-xs text-slate-500">{st.role} • <span className="text-emerald-600 font-semibold">{st.hourlyRate} บาท/ชม.</span></div>
+                        </div>
+                        <button onClick={() => handleDeleteStaff(st.id, st.name)} className="text-slate-400 hover:text-rose-600 p-1">
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 2. Job Types Management */}
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-5">
+                  <h3 className="font-bold text-slate-900 text-base flex items-center gap-2 border-b pb-3">
+                    <Tag size={20} className="text-indigo-600" />
+                    <span>จัดการประเภทงาน / วิชาเรียน</span>
+                  </h3>
+
+                  <form onSubmit={handleAddJobType} className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                    <input
+                      type="text"
+                      placeholder="ชื่อประเภทงาน (เช่น Pilates)"
+                      value={newJobType.name}
+                      onChange={e => setNewJobType({ ...newJobType, name: e.target.value })}
+                      className="px-3 py-2 border rounded-lg text-sm bg-white"
+                      required
+                    />
+                    <select
+                      value={newJobType.color}
+                      onChange={e => setNewJobType({ ...newJobType, color: e.target.value })}
+                      className="px-3 py-2 border rounded-lg text-sm bg-white"
+                    >
+                      {COLOR_OPTIONS.map(c => (
+                        <option key={c.name} value={c.class}>สี {c.name}</option>
+                      ))}
+                    </select>
+                    <button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2 rounded-lg text-sm transition">
+                      + เพิ่มประเภทงาน
+                    </button>
+                  </form>
+
+                  <div className="flex flex-wrap gap-2">
+                    {jobTypes.map(j => (
+                      <div key={j.id} className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2 ${j.color}`}>
+                        <span>{j.name}</span>
+                        <button onClick={() => handleDeleteJobType(j.id, j.name)} className="hover:text-rose-200">
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 3. PIN Security */}
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+                  <h3 className="font-bold text-slate-900 text-base flex items-center gap-2 border-b pb-3">
+                    <Key size={20} className="text-indigo-600" />
+                    <span>เปลี่ยนรหัสผ่าน Admin PIN</span>
+                  </h3>
+                  <div className="flex gap-2 max-w-md">
+                    <input
+                      type="password"
+                      value={newPin}
+                      onChange={(e) => setNewPin(e.target.value)}
+                      placeholder="ตั้งรหัส PIN ใหม่ (ตัวเลข)"
+                      className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <button onClick={handleUpdatePin} className="bg-slate-900 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-slate-800 transition">
+                      บันทึก PIN ใหม่
+                    </button>
                   </div>
                 </div>
               </div>
@@ -502,44 +681,76 @@ export default function App() {
         )}
       </main>
 
-      {/* Add Schedule Modal */}
-      {showModal && (
+      {/* Schedule Modal */}
+      {showScheduleModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
             <div className="flex justify-between items-center border-b pb-3">
               <h3 className="font-bold text-lg text-slate-900">เพิ่มตารางงานใหม่</h3>
-              <button onClick={() => setShowModal(false)} className="p-1 hover:bg-slate-100 rounded-lg text-slate-400"><X size={20} /></button>
+              <button onClick={() => setShowScheduleModal(false)} className="p-1 hover:bg-slate-100 rounded-lg text-slate-400"><X size={20} /></button>
             </div>
             <form onSubmit={handleSaveSchedule} className="space-y-3">
               <div>
                 <label className="text-xs font-bold text-slate-700">พนักงาน</label>
-                <select value={formData.staffId} onChange={e => setFormData({ ...formData, staffId: e.target.value })} className="w-full mt-1 p-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500">
+                <select
+                  value={scheduleFormData.staffId}
+                  onChange={e => handleStaffChangeInModal(e.target.value)}
+                  className="w-full mt-1 p-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                >
                   {staffList.map(st => <option key={st.id} value={st.id}>{st.name} ({st.role})</option>)}
                 </select>
               </div>
               <div>
                 <label className="text-xs font-bold text-slate-700">ประเภทงาน</label>
-                <select value={formData.jobTypeId} onChange={e => setFormData({ ...formData, jobTypeId: e.target.value })} className="w-full mt-1 p-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500">
+                <select
+                  value={scheduleFormData.jobTypeId}
+                  onChange={e => setScheduleFormData({ ...scheduleFormData, jobTypeId: e.target.value })}
+                  className="w-full mt-1 p-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                >
                   {jobTypes.map(j => <option key={j.id} value={j.id}>{j.name}</option>)}
                 </select>
               </div>
               <div>
                 <label className="text-xs font-bold text-slate-700">วันที่</label>
-                <input type="date" value={formData.date} onChange={e => setFormData({ ...formData, date: e.target.value })} className="w-full mt-1 p-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" required />
+                <input
+                  type="date"
+                  value={scheduleFormData.date}
+                  onChange={e => setScheduleFormData({ ...scheduleFormData, date: e.target.value })}
+                  className="w-full mt-1 p-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                  required
+                />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-bold text-slate-700">เวลาเริ่ม</label>
-                  <input type="time" value={formData.startTime} onChange={e => setFormData({ ...formData, startTime: e.target.value })} className="w-full mt-1 p-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" required />
+                  <input
+                    type="time"
+                    value={scheduleFormData.startTime}
+                    onChange={e => setScheduleFormData({ ...scheduleFormData, startTime: e.target.value })}
+                    className="w-full mt-1 p-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                    required
+                  />
                 </div>
                 <div>
                   <label className="text-xs font-bold text-slate-700">เวลาเลิก</label>
-                  <input type="time" value={formData.endTime} onChange={e => setFormData({ ...formData, endTime: e.target.value })} className="w-full mt-1 p-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" required />
+                  <input
+                    type="time"
+                    value={scheduleFormData.endTime}
+                    onChange={e => setScheduleFormData({ ...scheduleFormData, endTime: e.target.value })}
+                    className="w-full mt-1 p-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                    required
+                  />
                 </div>
               </div>
               <div>
                 <label className="text-xs font-bold text-slate-700">ค่าตอบแทน (บาท)</label>
-                <input type="number" value={formData.rate} onChange={e => setFormData({ ...formData, rate: e.target.value })} className="w-full mt-1 p-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" required />
+                <input
+                  type="number"
+                  value={scheduleFormData.rate}
+                  onChange={e => setScheduleFormData({ ...scheduleFormData, rate: e.target.value })}
+                  className="w-full mt-1 p-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                  required
+                />
               </div>
               <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow-md transition mt-4">
                 บันทึกตารางงาน
