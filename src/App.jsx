@@ -5,7 +5,7 @@ import {
 } from 'firebase/firestore';
 import {
   Calendar as CalendarIcon, Users, DollarSign, Settings, Plus, Edit, Trash2,
-  CheckCircle, AlertCircle, Download, Lock, Key, ChevronLeft, ChevronRight, Clock, X
+  CheckCircle, AlertCircle, Download, Lock, Key, ChevronLeft, ChevronRight, Clock, X, LayoutGrid, List
 } from 'lucide-react';
 
 // 1. Firebase Configuration
@@ -36,17 +36,25 @@ const THAI_MONTHS = [
   'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
 ];
 
+const WEEKDAYS = ['อา.', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.'];
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('calendar');
+  const [viewMode, setViewMode] = useState('grid'); // 'grid' | 'list'
   const [currentDate, setCurrentDate] = useState(new Date());
   const [schedules, setSchedules] = useState([]);
+  
   const [staffList, setStaffList] = useState([
     { id: 'st1', name: 'โค้ชเอ', role: 'Trainer', hourlyRate: 300 },
-    { id: 'st2', name: 'โค้ชบี', role: 'Instructor', hourlyRate: 350 }
+    { id: 'st2', name: 'โค้ชบี', role: 'Instructor', hourlyRate: 350 },
+    { id: 'st3', name: 'โค้ชซี', role: 'Personal Coach', hourlyRate: 400 }
   ]);
+
   const [jobTypes, setJobTypes] = useState([
-    { id: 'jt1', name: 'Personal Training', color: 'bg-blue-500' },
-    { id: 'jt2', name: 'Group Class', color: 'bg-green-500' }
+    { id: 'jt1', name: 'Personal Training', color: 'bg-indigo-500 text-white' },
+    { id: 'jt2', name: 'Group Class', color: 'bg-emerald-500 text-white' },
+    { id: 'jt3', name: 'Pilates', color: 'bg-amber-500 text-white' },
+    { id: 'jt4', name: 'Yoga Class', color: 'bg-rose-500 text-white' }
   ]);
 
   // Admin PIN State
@@ -78,7 +86,7 @@ export default function App() {
         setSchedules(data);
       },
       (error) => {
-        console.warn('Firestore offline or fallback mode activated', error);
+        console.warn('Firestore offline mode:', error);
       }
     );
     return () => unsubscribe();
@@ -108,25 +116,41 @@ export default function App() {
     showToast('เปลี่ยนรหัสผ่าน Admin PIN เรียบร้อย');
   };
 
+  // Open Modal for Specific Date
+  const handleOpenAddModal = (dateString = '') => {
+    const targetDate = dateString || new Date().toISOString().split('T')[0];
+    setFormData({
+      date: targetDate,
+      startTime: '09:00',
+      endTime: '10:00',
+      staffId: staffList[0]?.id || '',
+      jobTypeId: jobTypes[0]?.id || '',
+      note: '',
+      rate: staffList[0]?.hourlyRate || 300
+    });
+    setShowModal(true);
+  };
+
   // Add / Edit Schedule
   const handleSaveSchedule = async (e) => {
     e.preventDefault();
     try {
       await addDoc(collection(db, 'schedules'), {
         ...formData,
+        rate: Number(formData.rate),
         createdAt: new Date().toISOString()
       });
       showToast('บันทึกตารางงานสำเร็จ');
       setShowModal(false);
     } catch (err) {
-      // Local Fallback
-      setSchedules([...schedules, { ...formData, id: Date.now().toString() }]);
-      showToast('บันทึกในเครื่องเรียบร้อย');
+      setSchedules([...schedules, { ...formData, rate: Number(formData.rate), id: Date.now().toString() }]);
+      showToast('บันทึกเรียบร้อย');
       setShowModal(false);
     }
   };
 
   const handleDeleteSchedule = async (id) => {
+    if (!window.confirm('คุณต้องการลบตารางงานนี้ใช่หรือไม่?')) return;
     try {
       await deleteDoc(doc(db, 'schedules', id));
       showToast('ลบรายการเรียบร้อย');
@@ -142,11 +166,12 @@ export default function App() {
     const month = currentDate.getMonth();
 
     const currentMonthSchedules = schedules.filter(s => {
+      if (!s.date) return false;
       const d = new Date(s.date);
       return d.getFullYear() === year && d.getMonth() === month;
     });
 
-    let csvContent = "\uFEFF"; // UTF-8 BOM for Excel Thai support
+    let csvContent = "\uFEFF"; // UTF-8 BOM for Thai support in Excel
     csvContent += "ชื่อพนักงาน,วันที่,เวลาเริ่ม,เวลาเลิก,ประเภทงาน,ค่าตอบแทน (บาท)\n";
 
     currentMonthSchedules.forEach(s => {
@@ -166,55 +191,68 @@ export default function App() {
     showToast('Export CSV เรียบร้อยแล้ว');
   };
 
-  // Calendar render helpers
-  const yearBE = currentDate.getFullYear() + 543;
-  const monthName = THAI_MONTHS[currentDate.getMonth()];
+  // Calendar Grid Calculation
+  const year = currentDate.getFullYear();
+  const month = currentDate.getMonth();
+  const yearBE = year + 543;
+  const monthName = THAI_MONTHS[month];
 
-  const nextMonth = () => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
-  const prevMonth = () => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
+  const firstDayIndex = new Date(year, month, 1).getDay(); // 0 = Sunday
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+  const prevMonth = () => setCurrentDate(new Date(year, month - 1, 1));
+  const nextMonth = () => setCurrentDate(new Date(year, month + 1, 1));
+  const resetToToday = () => setCurrentDate(new Date());
+
+  // Format YYYY-MM-DD helper
+  const formatDateString = (dayNumber) => {
+    const m = String(month + 1).padStart(2, '0');
+    const d = String(dayNumber).padStart(2, '0');
+    return `${year}-${m}-${d}`;
+  };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800">
+    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
       {/* Toast Notification */}
       {toast && (
-        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-white flex items-center gap-2 ${toast.type === 'error' ? 'bg-red-500' : 'bg-emerald-600'}`}>
+        <div className={`fixed top-4 right-4 z-50 px-5 py-3 rounded-xl shadow-xl text-white flex items-center gap-2 animate-bounce ${toast.type === 'error' ? 'bg-rose-600' : 'bg-emerald-600'}`}>
           {toast.type === 'error' ? <AlertCircle size={20} /> : <CheckCircle size={20} />}
-          <span>{toast.msg}</span>
+          <span className="font-medium text-sm">{toast.msg}</span>
         </div>
       )}
 
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
-        <div className="max-w-7xl mx-m-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row justify-between items-center gap-4">
+      {/* Header Bar */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col sm:flex-row justify-between items-center gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-xl shadow-md">
+            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-xl shadow-md">
               F
             </div>
             <div>
-              <h1 className="text-xl font-bold text-slate-900">Fitculty</h1>
-              <p className="text-xs text-slate-500">ระบบจัดตารางงาน & คำนวณค่าตอบแทน</p>
+              <h1 className="text-xl font-bold text-slate-900 tracking-tight">Fitculty</h1>
+              <p className="text-xs text-slate-500 font-medium">ระบบจัดตารางงาน & คำนวณค่าตอบแทน</p>
             </div>
           </div>
 
           {/* Navigation Tabs */}
-          <nav className="flex bg-slate-100 p-1 rounded-xl">
+          <nav className="flex bg-slate-100 p-1 rounded-xl border border-slate-200/80">
             <button
               onClick={() => setActiveTab('calendar')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition ${activeTab === 'calendar' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition ${activeTab === 'calendar' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               <CalendarIcon size={18} />
               <span>ปฏิทินงาน</span>
             </button>
             <button
               onClick={() => setActiveTab('payroll')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition ${activeTab === 'payroll' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition ${activeTab === 'payroll' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               <DollarSign size={18} />
               <span>สรุปค่าตอบแทน</span>
             </button>
             <button
               onClick={() => setActiveTab('settings')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition ${activeTab === 'settings' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition ${activeTab === 'settings' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               <Settings size={18} />
               <span>ตั้งค่าหลังบ้าน</span>
@@ -223,68 +261,157 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* CALENDAR TAB */}
+      {/* Main Content Area */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* TAB 1: CALENDAR */}
         {activeTab === 'calendar' && (
-          <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-              <div className="flex items-center gap-4">
-                <h2 className="text-2xl font-bold text-slate-800">
+          <div className="space-y-5">
+            {/* Control Header */}
+            <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+              <div className="flex items-center gap-3">
+                <h2 className="text-2xl font-extrabold text-slate-900 min-w-[180px]">
                   {monthName} {yearBE}
                 </h2>
-                <div className="flex gap-1">
-                  <button onClick={prevMonth} className="p-2 hover:bg-slate-100 rounded-lg transition"><ChevronLeft size={20} /></button>
-                  <button onClick={nextMonth} className="p-2 hover:bg-slate-100 rounded-lg transition"><ChevronRight size={20} /></button>
+                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
+                  <button onClick={prevMonth} className="p-1.5 hover:bg-white rounded-lg text-slate-700 transition"><ChevronLeft size={18} /></button>
+                  <button onClick={resetToToday} className="px-2.5 py-1 text-xs font-bold text-slate-600 hover:bg-white rounded-lg transition">วันนี้</button>
+                  <button onClick={nextMonth} className="p-1.5 hover:bg-white rounded-lg text-slate-700 transition"><ChevronRight size={18} /></button>
                 </div>
               </div>
-              <button
-                onClick={() => {
-                  setFormData({ date: new Date().toISOString().split('T')[0], startTime: '09:00', endTime: '10:00', staffId: staffList[0]?.id || '', jobTypeId: jobTypes[0]?.id || '', note: '', rate: 300 });
-                  setShowModal(true);
-                }}
-                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl font-medium shadow-md transition"
-              >
-                <Plus size={18} />
-                <span>เพิ่มตารางงาน</span>
-              </button>
+
+              <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+                {/* View Switcher */}
+                <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
+                  <button onClick={() => setViewMode('grid')} className={`p-2 rounded-lg transition ${viewMode === 'grid' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`} title="มุมมองปฏิทิน">
+                    <LayoutGrid size={18} />
+                  </button>
+                  <button onClick={() => setViewMode('list')} className={`p-2 rounded-lg transition ${viewMode === 'list' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`} title="มุมมองรายการ">
+                    <List size={18} />
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => handleOpenAddModal()}
+                  className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow-md transition"
+                >
+                  <Plus size={18} />
+                  <span>เพิ่มตารางงาน</span>
+                </button>
+              </div>
             </div>
 
-            {/* Schedule List / Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {schedules.map(s => {
-                const staff = staffList.find(st => st.id === s.staffId);
-                const job = jobTypes.find(j => j.id === s.jobTypeId);
-                return (
-                  <div key={s.id} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 hover:shadow-md transition">
-                    <div className="flex justify-between items-start mb-3">
-                      <span className={`px-2.5 py-1 rounded-full text-xs font-semibold text-white ${job?.color || 'bg-slate-500'}`}>
-                        {job?.name || 'ทั่วไป'}
-                      </span>
-                      <button onClick={() => handleDeleteSchedule(s.id)} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={16} /></button>
+            {/* GRID CALENDAR VIEW */}
+            {viewMode === 'grid' && (
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                {/* Weekday Header */}
+                <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50/80 text-center text-xs font-bold text-slate-500 py-3">
+                  {WEEKDAYS.map((day, idx) => (
+                    <div key={day} className={idx === 0 ? 'text-rose-500' : idx === 6 ? 'text-indigo-500' : ''}>
+                      {day}
                     </div>
-                    <h3 className="font-bold text-slate-800 text-lg">{staff?.name || 'ไม่ระบุพนักงาน'}</h3>
-                    <div className="text-sm text-slate-500 space-y-1 mt-2">
-                      <div className="flex items-center gap-2"><CalendarIcon size={16} /> <span>{s.date}</span></div>
-                      <div className="flex items-center gap-2"><Clock size={16} /> <span>{s.startTime} - {s.endTime} น.</span></div>
-                      <div className="flex items-center gap-2 font-semibold text-emerald-600"><DollarSign size={16} /> <span>{s.rate} บาท</span></div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                  ))}
+                </div>
+
+                {/* Days Grid */}
+                <div className="grid grid-cols-7 auto-rows-fr divide-x divide-y divide-slate-100 bg-slate-100/30">
+                  {/* Empty Cells before 1st day */}
+                  {Array.from({ length: firstDayIndex }).map((_, i) => (
+                    <div key={`empty-${i}`} className="min-h-[110px] bg-slate-50/40 p-2 opacity-50" />
+                  ))}
+
+                  {/* Calendar Days */}
+                  {Array.from({ length: daysInMonth }).map((_, i) => {
+                    const dayNum = i + 1;
+                    const dateStr = formatDateString(dayNum);
+                    const daySchedules = schedules.filter(s => s.date === dateStr);
+                    const isToday = new Date().toISOString().split('T')[0] === dateStr;
+
+                    return (
+                      <div
+                        key={dateStr}
+                        onClick={() => handleOpenAddModal(dateStr)}
+                        className={`min-h-[110px] p-2 bg-white hover:bg-indigo-50/30 transition cursor-pointer flex flex-col justify-between group relative ${isToday ? 'bg-indigo-50/20' : ''}`}
+                      >
+                        <div className="flex justify-between items-center mb-1">
+                          <span className={`text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center ${isToday ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-700'}`}>
+                            {dayNum}
+                          </span>
+                          <span className="opacity-0 group-hover:opacity-100 transition text-indigo-600 text-[10px] font-bold">+ เพิ่ม</span>
+                        </div>
+
+                        {/* Schedules in Day Cell */}
+                        <div className="space-y-1 overflow-y-auto max-h-[80px] pr-0.5 custom-scrollbar">
+                          {daySchedules.map(s => {
+                            const staff = staffList.find(st => st.id === s.staffId)?.name || 'งาน';
+                            const job = jobTypes.find(j => j.id === s.jobTypeId);
+                            return (
+                              <div
+                                key={s.id}
+                                onClick={(e) => { e.stopPropagation(); handleDeleteSchedule(s.id); }}
+                                className={`text-[11px] p-1.5 rounded-lg font-medium shadow-2xs flex justify-between items-center group/item ${job?.color || 'bg-slate-700 text-white'}`}
+                                title="คลิกเพื่อลบ"
+                              >
+                                <div className="truncate pr-1">
+                                  <div className="font-bold truncate">{staff}</div>
+                                  <div className="text-[9px] opacity-85">{s.startTime}-{s.endTime}</div>
+                                </div>
+                                <Trash2 size={12} className="opacity-0 group-hover/item:opacity-100 transition text-white hover:text-rose-200 shrink-0" />
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* LIST VIEW */}
+            {viewMode === 'list' && (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {schedules
+                  .filter(s => {
+                    if (!s.date) return true;
+                    const d = new Date(s.date);
+                    return d.getMonth() === month && d.getFullYear() === year;
+                  })
+                  .map(s => {
+                    const staff = staffList.find(st => st.id === s.staffId);
+                    const job = jobTypes.find(j => j.id === s.jobTypeId);
+                    return (
+                      <div key={s.id} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 hover:shadow-md transition flex flex-col justify-between">
+                        <div>
+                          <div className="flex justify-between items-start mb-3">
+                            <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${job?.color || 'bg-slate-500 text-white'}`}>
+                              {job?.name || 'ทั่วไป'}
+                            </span>
+                            <button onClick={() => handleDeleteSchedule(s.id)} className="text-slate-400 hover:text-rose-600 p-1 transition"><Trash2 size={16} /></button>
+                          </div>
+                          <h3 className="font-bold text-slate-900 text-lg">{staff?.name || 'ไม่ระบุพนักงาน'}</h3>
+                          <div className="text-xs text-slate-500 space-y-1.5 mt-3">
+                            <div className="flex items-center gap-2"><CalendarIcon size={14} /> <span>วันที่: {s.date}</span></div>
+                            <div className="flex items-center gap-2"><Clock size={14} /> <span>เวลา: {s.startTime} - {s.endTime} น.</span></div>
+                            <div className="flex items-center gap-2 font-bold text-emerald-600 text-sm"><DollarSign size={14} /> <span>{s.rate} บาท</span></div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            )}
           </div>
         )}
 
-        {/* PAYROLL TAB */}
+        {/* TAB 2: PAYROLL SUMMARY */}
         {activeTab === 'payroll' && (
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-6">
-            <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
+            <div className="flex flex-col sm:flex-row justify-between items-center gap-4 border-b border-slate-100 pb-4">
               <div>
-                <h2 className="text-xl font-bold text-slate-800">สรุปเงินเดือน {monthName} {yearBE}</h2>
-                <p className="text-sm text-slate-500">คำนวณจากตารางงานในเดือนนี้</p>
+                <h2 className="text-xl font-bold text-slate-900">สรุปค่าตอบแทนพนักงาน ({monthName} {yearBE})</h2>
+                <p className="text-xs text-slate-500 mt-1">คำนวณจากตารางงานที่ลงบันทึกในเดือนนี้</p>
               </div>
-              <button onClick={exportPayrollCSV} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-medium shadow transition">
+              <button onClick={exportPayrollCSV} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow transition">
                 <Download size={18} />
                 <span>Export CSV (Excel)</span>
               </button>
@@ -293,26 +420,27 @@ export default function App() {
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50 text-slate-600 text-sm">
-                    <th className="py-3 px-4">ชื่อพนักงาน</th>
-                    <th className="py-3 px-4">ตำแหน่ง</th>
-                    <th className="py-3 px-4">จำนวนงานในเดือนนี้</th>
-                    <th className="py-3 px-4 text-right">ยอดรวมค่าตอบแทน</th>
+                  <tr className="border-b border-slate-200 bg-slate-50/80 text-slate-600 text-xs font-bold uppercase tracking-wider">
+                    <th className="py-3.5 px-4">ชื่อพนักงาน</th>
+                    <th className="py-3.5 px-4">ตำแหน่ง</th>
+                    <th className="py-3.5 px-4 text-center">จำนวนงานในเดือนนี้</th>
+                    <th className="py-3.5 px-4 text-right">ยอดรวมค่าตอบแทน</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-slate-100 text-sm">
                   {staffList.map(st => {
                     const staffSchedules = schedules.filter(s => {
+                      if (!s.date) return false;
                       const d = new Date(s.date);
-                      return s.staffId === st.id && d.getMonth() === currentDate.getMonth() && d.getFullYear() === currentDate.getFullYear();
+                      return s.staffId === st.id && d.getMonth() === month && d.getFullYear() === year;
                     });
                     const totalPay = staffSchedules.reduce((sum, s) => sum + Number(s.rate || 0), 0);
                     return (
-                      <tr key={st.id} className="hover:bg-slate-50">
-                        <td className="py-3 px-4 font-medium text-slate-800">{st.name}</td>
-                        <td className="py-3 px-4 text-slate-500">{st.role}</td>
-                        <td className="py-3 px-4 text-slate-600">{staffSchedules.length} งาน</td>
-                        <td className="py-3 px-4 text-right font-bold text-emerald-600">{totalPay.toLocaleString()} บาท</td>
+                      <tr key={st.id} className="hover:bg-slate-50/80 transition">
+                        <td className="py-4 px-4 font-bold text-slate-900">{st.name}</td>
+                        <td className="py-4 px-4 text-slate-500">{st.role}</td>
+                        <td className="py-4 px-4 text-center font-semibold text-slate-700">{staffSchedules.length} งาน</td>
+                        <td className="py-4 px-4 text-right font-extrabold text-emerald-600 text-base">{totalPay.toLocaleString()} บาท</td>
                       </tr>
                     );
                   })}
@@ -322,48 +450,50 @@ export default function App() {
           </div>
         )}
 
-        {/* SETTINGS TAB */}
+        {/* TAB 3: ADMIN SETTINGS */}
         {activeTab === 'settings' && (
-          <div className="max-w-2xl mx-auto bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-6">
+          <div className="max-w-xl mx-auto bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
             {!isAdmin ? (
-              <form onSubmit={handleAdminLogin} className="space-y-4">
+              <form onSubmit={handleAdminLogin} className="space-y-5 py-4">
                 <div className="text-center space-y-2">
-                  <div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto">
-                    <Lock size={24} />
+                  <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+                    <Lock size={28} />
                   </div>
-                  <h2 className="text-xl font-bold">เข้าสู่ระบบ Admin</h2>
-                  <p className="text-sm text-slate-500">กรุณากรอกรหัส PIN เพื่อจัดการตั้งค่าระบบ (PIN ดั้งเดิม: 1234)</p>
+                  <h2 className="text-xl font-bold text-slate-900">เข้าสู่ระบบ Admin</h2>
+                  <p className="text-xs text-slate-500">กรุณากรอกรหัส Admin PIN เพื่อเข้าสู่การตั้งค่าระบบ (PIN ดั้งเดิม: 1234)</p>
                 </div>
                 <input
                   type="password"
                   value={inputPin}
                   onChange={(e) => setInputPin(e.target.value)}
-                  placeholder="กรอกรหัส PIN"
-                  className="w-full text-center text-2xl tracking-widest px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                  placeholder="กรอกรหัส PIN 4 หลัก"
+                  className="w-full text-center text-3xl tracking-[0.5em] font-bold px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                  maxLength={8}
                 />
-                <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl shadow transition">
+                <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow-md transition">
                   ยืนยันรหัสผ่าน
                 </button>
               </form>
             ) : (
               <div className="space-y-6">
                 <div className="flex justify-between items-center pb-4 border-b border-slate-200">
-                  <h2 className="text-lg font-bold">⚙️ ตั้งค่าระบบหลังบ้าน</h2>
-                  <button onClick={() => setIsAdmin(false)} className="text-sm text-red-600 hover:underline">ออกจากระบบ Admin</button>
+                  <h2 className="text-lg font-bold text-slate-900">⚙️ ตั้งค่าระบบหลังบ้าน</h2>
+                  <button onClick={() => setIsAdmin(false)} className="text-xs font-bold text-rose-600 hover:underline">ออกจากระบบ Admin</button>
                 </div>
 
-                {/* Change PIN */}
-                <div className="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
-                  <h3 className="font-semibold text-slate-800 flex items-center gap-2"><Key size={18} /> เปลี่ยนรหัสผ่าน Admin PIN</h3>
-                  <div className="flex gap-2">
-                    <input
-                      type="password"
-                      value={newPin}
-                      onChange={(e) => setNewPin(e.target.value)}
-                      placeholder="ตั้งรหัส PIN ใหม่"
-                      className="flex-1 px-3 py-2 border border-slate-300 rounded-lg"
-                    />
-                    <button onClick={handleUpdatePin} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium">บันทึก PIN ใหม่</button>
+                <div className="space-y-4">
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                    <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2"><Key size={16} /> เปลี่ยนรหัสผ่าน Admin PIN</h3>
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        value={newPin}
+                        onChange={(e) => setNewPin(e.target.value)}
+                        placeholder="ตั้งรหัส PIN ใหม่"
+                        className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <button onClick={handleUpdatePin} className="bg-slate-900 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-slate-800 transition">บันทึก PIN</button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -374,45 +504,45 @@ export default function App() {
 
       {/* Add Schedule Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl space-y-4">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex justify-between items-center border-b pb-3">
-              <h3 className="font-bold text-lg text-slate-800">เพิ่มตารางงานใหม่</h3>
-              <button onClick={() => setShowModal(false)}><X size={20} className="text-slate-400 hover:text-slate-600" /></button>
+              <h3 className="font-bold text-lg text-slate-900">เพิ่มตารางงานใหม่</h3>
+              <button onClick={() => setShowModal(false)} className="p-1 hover:bg-slate-100 rounded-lg text-slate-400"><X size={20} /></button>
             </div>
             <form onSubmit={handleSaveSchedule} className="space-y-3">
               <div>
-                <label className="text-xs font-medium text-slate-600">พนักงาน</label>
-                <select value={formData.staffId} onChange={e => setFormData({ ...formData, staffId: e.target.value })} className="w-full mt-1 p-2.5 border rounded-xl">
-                  {staffList.map(st => <option key={st.id} value={st.id}>{st.name}</option>)}
+                <label className="text-xs font-bold text-slate-700">พนักงาน</label>
+                <select value={formData.staffId} onChange={e => setFormData({ ...formData, staffId: e.target.value })} className="w-full mt-1 p-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500">
+                  {staffList.map(st => <option key={st.id} value={st.id}>{st.name} ({st.role})</option>)}
                 </select>
               </div>
               <div>
-                <label className="text-xs font-medium text-slate-600">ประเภทงาน</label>
-                <select value={formData.jobTypeId} onChange={e => setFormData({ ...formData, jobTypeId: e.target.value })} className="w-full mt-1 p-2.5 border rounded-xl">
+                <label className="text-xs font-bold text-slate-700">ประเภทงาน</label>
+                <select value={formData.jobTypeId} onChange={e => setFormData({ ...formData, jobTypeId: e.target.value })} className="w-full mt-1 p-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500">
                   {jobTypes.map(j => <option key={j.id} value={j.id}>{j.name}</option>)}
                 </select>
               </div>
               <div>
-                <label className="text-xs font-medium text-slate-600">วันที่</label>
-                <input type="date" value={formData.date} onChange={e => setFormData({ ...formData, date: e.target.value })} className="w-full mt-1 p-2.5 border rounded-xl" required />
+                <label className="text-xs font-bold text-slate-700">วันที่</label>
+                <input type="date" value={formData.date} onChange={e => setFormData({ ...formData, date: e.target.value })} className="w-full mt-1 p-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" required />
               </div>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-slate-600">เวลาเริ่ม</label>
-                  <input type="time" value={formData.startTime} onChange={e => setFormData({ ...formData, startTime: e.target.value })} className="w-full mt-1 p-2.5 border rounded-xl" required />
+                  <label className="text-xs font-bold text-slate-700">เวลาเริ่ม</label>
+                  <input type="time" value={formData.startTime} onChange={e => setFormData({ ...formData, startTime: e.target.value })} className="w-full mt-1 p-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" required />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-slate-600">เวลาเลิก</label>
-                  <input type="time" value={formData.endTime} onChange={e => setFormData({ ...formData, endTime: e.target.value })} className="w-full mt-1 p-2.5 border rounded-xl" required />
+                  <label className="text-xs font-bold text-slate-700">เวลาเลิก</label>
+                  <input type="time" value={formData.endTime} onChange={e => setFormData({ ...formData, endTime: e.target.value })} className="w-full mt-1 p-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" required />
                 </div>
               </div>
               <div>
-                <label className="text-xs font-medium text-slate-600">ค่าตอบแทน (บาท)</label>
-                <input type="number" value={formData.rate} onChange={e => setFormData({ ...formData, rate: e.target.value })} className="w-full mt-1 p-2.5 border rounded-xl" required />
+                <label className="text-xs font-bold text-slate-700">ค่าตอบแทน (บาท)</label>
+                <input type="number" value={formData.rate} onChange={e => setFormData({ ...formData, rate: e.target.value })} className="w-full mt-1 p-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" required />
               </div>
-              <button type="submit" className="w-full bg-indigo-600 text-white font-medium py-3 rounded-xl hover:bg-indigo-700 transition mt-4">
-                บันทึกข้อมูล
+              <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow-md transition mt-4">
+                บันทึกตารางงาน
               </button>
             </form>
           </div>
